@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Benny the Icicle — Text Condition</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <div id="gaze-dot"></div>
+
+  <!-- SCREEN 1: WELCOME -->
+  <div id="screen-welcome" class="screen active">
+    <h1>🧊 Benny the Icicle</h1>
+    <p class="subtitle">Text reading study</p>
+    <button class="btn-primary" onclick="startStory('text')">Begin</button>
+  </div>
+
+  <!-- SCREEN 2: STORY -->
+  <div id="screen-story" class="screen">
+
+    <div id="story-header">
+      <span id="story-page-label">Page 1 / 10</span>
+      <div id="story-progress-bar-wrap">
+        <div id="story-progress-bar" style="width:10%"></div>
+      </div>
+      <span id="story-data-count"></span>
+    </div>
+
+    <div id="page-timer-wrap"><div id="page-timer-bar"></div></div>
+
+    <!-- Page content wrapper (image slot hidden by CSS in text mode) -->
+    <div id="page-content">
+      <p id="story-text"></p>
+
+      <div id="image-slot">
+        <img id="image-slot-img" src="" alt="Story illustration">
+        <div id="image-slot-placeholder">
+          <div class="icon">🖼</div>
+          <div class="label" id="image-slot-label">Image for page 1</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="story-nav">
+      <button class="nav-btn" id="btn-prev" onclick="navigate(-1)" disabled>← Back</button>
+      <span id="key-hint">or use ← → arrow keys</span>
+      <button class="nav-btn" id="btn-next" onclick="navigate(1)">Next →</button>
+    </div>
+
+  </div>
+
+  <!-- SCREEN 3: END -->
+  <div id="screen-end" class="screen">
+    <h2>🎉 The End!</h2>
+    <p id="end-summary"></p>
+    <div class="end-buttons">
+      <button class="btn-secondary" onclick="location.reload()">↩ Start Again</button>
+    </div>
+  </div>
+
+  <!-- No eye tracking scripts — stubs keep story.js happy -->
+  <script>
+    const STORY_MODE = 'text';
+    window.gazeData   = [];
+    window.gazeActive = false;
+    window.startTime  = null;
+    function pauseTracker() {}   // stub — no tracker in this test
+    function downloadCSV()  {}   // stub — no data collected
+  </script>
+  <script src="data/story.js"></script>
+  <script src="js/config_shared.js"></script>
+  <script src="js/story.js"></script>
+
+</body>
+</html>

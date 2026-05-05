@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EyeGestures Debug Test</title>
+
+  <!-- EyeGestures dependencies -->
+  <script src="https://www.lactame.com/lib/ml/6.0.0/ml.min.js"></script>
+  <link  rel="stylesheet" href="https://eyegestures.com/eyegestures.css">
+  <script src="https://eyegestures.com/eyegestures.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0d0d0d; color: #ccc; padding: 16px; font-size: 13px; }
+    h1   { color: #4af; margin-bottom: 14px; font-size: 1.1rem; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .box { background: #111; border: 1px solid #333; border-radius: 6px; padding: 12px; flex: 1; min-width: 260px; }
+    .box h2 { color: #4af; font-size: 0.78rem; letter-spacing: 1px; margin-bottom: 8px; }
+    .line { display: flex; justify-content: space-between; margin: 3px 0; }
+    .ok   { color: #0f0; } .err { color: #f44; } .warn { color: #fa0; } .val { color: #ff0; }
+
+    #log {
+      background: #060606; border: 1px solid #222; border-radius: 6px;
+      height: 300px; overflow-y: auto; padding: 10px;
+      font-size: 0.72rem; line-height: 1.7;
+    }
+    .lt  { color: #444; } .lev { color: #4af; } .lgd { color: #0f0; }
+    .lbd { color: #f55; } .lwn { color: #fa0; } .lcn { color: #888; }
+
+    /* ── Fixation cross override ──────────────────────────────────────
+       EyeGestures positions calib_cursor with left = x-100, top = y-100,
+       so the container MUST stay 200×200 for the centering math to work.
+       We make the container transparent and draw a small cross inside it.
+    ─────────────────────────────────────────────────────────────────── */
+    #calib_cursor {
+      width:  200px !important;
+      height: 200px !important;
+      background:    transparent !important;
+      border-radius: 0          !important;
+      border:        none       !important;
+      position: fixed !important;           /* keep EyeGestures' fixed positioning */
+    }
+    /* Horizontal arm */
+    #calib_cursor::before {
+      content: '';
+      position: absolute;
+      width: 32px; height: 3px;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #cc0000;
+      box-shadow: 0 0 0 1.5px #fff;        /* white outline for any background */
+      border-radius: 1px;
+    }
+    /* Vertical arm */
+    #calib_cursor::after {
+      content: '';
+      position: absolute;
+      width: 3px; height: 32px;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #cc0000;
+      box-shadow: 0 0 0 1.5px #fff;
+      border-radius: 1px;
+    }
+
+    #gaze-dot {
+      position: fixed; width: 20px; height: 20px;
+      background: rgba(255,60,60,0.85); border: 2px solid #fff;
+      border-radius: 50%; pointer-events: none; z-index: 9999;
+      transform: translate(-50%,-50%); display: none;
+    }
+    button {
+      padding: 8px 20px; font-family: monospace; font-size: 0.8rem;
+      background: #1a2a1a; color: #0f0; border: 1px solid #0a0; border-radius: 4px;
+      cursor: pointer; margin: 3px;
+    }
+    button:hover { background: #2a4a2a; }
+    button:disabled { opacity: 0.35; cursor: default; }
+    button.blue { background: #0a1a2a; color: #4af; border-color: #2af; }
+    button.red  { background: #2a0a0a; color: #f44; border-color: #a44; }
+  </style>
+</head>
+<body>
+
+  <!-- EyeGestures requires EXACTLY id="video" internally -->
+  <video id="video" width="640" height="480" autoplay style="display:none;"></video>
+  <!-- EyeGestures calls getElementById('status'/'error') — must exist -->
+  <div id="status" style="display:none;"></div>
+  <div id="error"  style="display:none;"></div>
+  <div id="gaze-dot"></div>
+
+  <h1>🔬 EyeGestures Debug Test</h1>
+
+  <!-- Step buttons -->
+  <div class="row" style="margin-bottom:14px;">
+    <button id="btn-cam"   onclick="testCamera()"  class="blue">① Test Camera Only</button>
+    <button id="btn-start" onclick="startEG()"     >② Start EyeGestures</button>
+    <button id="btn-dom"   onclick="checkDOM()"    class="blue">③ Inspect DOM</button>
+    <button id="btn-recal" onclick="doRecal()"     disabled>④ Recalibrate</button>
+    <button id="btn-clear" onclick="clearLog()"    class="red">Clear Log</button>
+  </div>
+
+  <div class="row">
+    <!-- Dependency panel -->
+    <div class="box">
+      <h2>DEPENDENCIES (checked on load)</h2>
+      <div class="line"><span>ml.js  (ML global)</span>    <span id="d-ml"  class="val">…</span></div>
+      <div class="line"><span>EyeGestures class</span>     <span id="d-eg"  class="val">…</span></div>
+      <div class="line"><span>Secure context</span>        <span id="d-sec" class="val">…</span></div>
+      <div class="line"><span>Camera permission</span>     <span id="d-cam" class="val">not tested</span></div>
+    </div>
+
+    <!-- Live state panel -->
+    <div class="box">
+      <h2>LIVE TRACKER STATE</h2>
+      <div class="line"><span>Callback ever fired</span>   <span id="s-cb"    class="val">NO</span></div>
+      <div class="line"><span>Gaze X / Y (px)</span>       <span id="s-xy"    class="val">—</span></div>
+      <div class="line"><span>calibration flag</span>      <span id="s-cf"    class="val">—</span></div>
+      <div class="line"><span>Callback count</span>        <span id="s-cnt"   class="val">0</span></div>
+      <div class="line"><span>Calibration DONE</span>      <span id="s-done"  class="val">NO</span></div>
+      <div class="line"><span>#status div content</span>   <span id="s-stat"  class="val">—</span></div>
+      <div class="line"><span>#error div content</span>    <span id="s-err"   class="val">—</span></div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div id="log"></div>
+
+  <script>
+  'use strict';
+
+  let gestures = null;
+  let cbCount  = 0;
+  let calDone  = false;
+
+  /* ══════════════════════════════════
+     LOGGING
+  ══════════════════════════════════ */
+  function log(msg, cls = 'lcn') {
+    const el  = document.getElementById('log');
+    const now = new Date().toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const div = document.createElement('div');
+    div.innerHTML = `<span class="lt">[${now}]</span> <span class="${cls}">${msg}</span>`;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+  function clearLog() { document.getElementById('log').innerHTML = ''; }
+
+  /* Intercept console so EyeGestures' internal logs appear here */
+  const _clog  = console.log.bind(console);
+  const _cerr  = console.error.bind(console);
+  const _cwarn = console.warn.bind(console);
+  console.log   = (...a) => { _clog(...a);  log('console.log: '   + a.join(' '), 'lcn'); };
+  console.error = (...a) => { _cerr(...a);  log('console.error: ' + a.join(' '), 'lbd'); };
+  console.warn  = (...a) => { _cwarn(...a); log('console.warn: '  + a.join(' '), 'lwn'); };
+
+  /* Catch any uncaught JS errors */
+  window.onerror = (msg, src, line, col, err) => {
+    log(`JS ERROR: ${msg}  (${src}:${line})`, 'lbd');
+  };
+  window.addEventListener('unhandledrejection', e => {
+    log(`Unhandled Promise rejection: ${e.reason}`, 'lbd');
+  });
+
+  /* Watch hidden #status and #error for EyeGestures messages */
+  function watchDiv(id, displayId) {
+    const obs = new MutationObserver(() => {
+      const txt = document.getElementById(id).textContent.trim();
+      if (txt) {
+        document.getElementById(displayId).textContent = txt;
+        log(`#${id} → "${txt}"`, id === 'error' ? 'lbd' : 'lev');
+      }
+    });
+    obs.observe(document.getElementById(id), { childList: true, characterData: true, subtree: true });
+  }
+
+  /* ══════════════════════════════════
+     ON PAGE LOAD — dependency checks
+  ══════════════════════════════════ */
+  window.addEventListener('load', () => {
+    log('Page loaded — checking dependencies…', 'lev');
+
+    const ml  = typeof ML          !== 'undefined';
+    const eg  = typeof EyeGestures !== 'undefined';
+    const sec = window.isSecureContext;
+
+    set('d-ml',  ml  ? '✓ loaded' : '✗ MISSING',  ml  ? 'ok' : 'err');
+    set('d-eg',  eg  ? '✓ loaded' : '✗ MISSING',  eg  ? 'ok' : 'err');
+    set('d-sec', sec ? '✓ ' + location.protocol : '✗ NOT SECURE', sec ? 'ok' : 'err');
+
+    log('ml.js: '        + (ml  ? '✓' : '✗ MISSING — calibration will fail'), ml  ? 'lgd' : 'lbd');
+    log('EyeGestures: '  + (eg  ? '✓' : '✗ MISSING — script did not load'),   eg  ? 'lgd' : 'lbd');
+    log('Secure context: '+ (sec ? '✓' : '✗ — getUserMedia requires HTTPS or localhost'), sec ? 'lgd' : 'lbd');
+
+    watchDiv('status', 's-stat');
+    watchDiv('error',  's-err');
+
+    log('Ready. Click ① to test camera first, then ② to start EyeGestures.', 'lev');
+  });
+
+  /* ══════════════════════════════════
+     ① CAMERA-ONLY TEST
+  ══════════════════════════════════ */
+  async function testCamera() {
+    log('Testing camera access (getUserMedia)…', 'lev');
+    set('d-cam', 'testing…', 'val');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const tracks = stream.getVideoTracks();
+      log('✓ Camera OK — track: ' + (tracks[0]?.label || 'unknown'), 'lgd');
+      set('d-cam', '✓ ' + (tracks[0]?.label || 'ok'), 'ok');
+      stream.getTracks().forEach(t => t.stop()); // release immediately
+    } catch (e) {
+      log('✗ Camera FAILED: ' + e.name + ' — ' + e.message, 'lbd');
+      set('d-cam', '✗ ' + e.name, 'err');
+    }
+  }
+
+  /* ══════════════════════════════════
+     ② START EYEGESTURES
+  ══════════════════════════════════ */
+  function startEG() {
+    document.getElementById('btn-start').disabled = true;
+    log('═══ Creating EyeGestures instance… ═══', 'lev');
+
+    try {
+      gestures = new EyeGestures('video', onGazePoint);
+      log('✓ Instance created', 'lgd');
+
+      // ── Tighten the fixation acceptance area ────────────────────────
+      // EyeGestures advances the dot when:
+      //   distance(gaze, target) < 0.10 * screen_width  AND  counter > 20
+      // We patch processKeyPoints to use 0.04 * screen_width (~4%) instead,
+      // so the participant must fixate precisely on the cross centre.
+      // The 200×200 container size and positioning are NOT changed.
+      const _orig = gestures.processKeyPoints.bind(gestures);
+      gestures.processKeyPoints = function(lec, rec, ox, oy, sx, sy, w, h) {
+        // Store originals, shrink threshold, call, restore
+        const origW = this.screen_width;
+        this.screen_width = origW * 0.4;   // 0.04 × real width effective radius
+        _orig(lec, rec, ox, oy, sx, sy, w, h);
+        this.screen_width = origW;         // restore so dot positions stay correct
+      };
+      log('✓ Acceptance radius patched → 4% of screen width', 'lgd');
+      // ────────────────────────────────────────────────────────────────
+    } catch (e) {
+      log('✗ Constructor threw: ' + e.message, 'lbd');
+      document.getElementById('btn-start').disabled = false;
+      return;
+    }
+
+    gestures.invisible();
+    log('invisible() called — built-in blue cursor hidden', 'lcn');
+
+    log('Calling start()… EyeGestures instruction overlay should appear now.', 'lev');
+    try {
+      gestures.start();
+      log('✓ start() returned. Click "Continue" on the EyeGestures overlay.', 'lgd');
+    } catch (e) {
+      log('✗ start() threw: ' + e.message, 'lbd');
+    }
+
+    document.getElementById('btn-recal').disabled = false;
+  }
+
+  /* ══════════════════════════════════
+     GAZE CALLBACK
+  ══════════════════════════════════ */
+  function onGazePoint(point, calibration) {
+    cbCount++;
+
+    if (cbCount === 1) {
+      log('🎉 FIRST CALLBACK! Tracker pipeline is working.', 'lgd');
+      set('s-cb', '✓ YES', 'ok');
+    }
+
+    const x = Math.round(point[0]);
+    const y = Math.round(point[1]);
+
+    set('s-xy',  `${x} / ${y}`, 'val');
+    set('s-cnt', cbCount, 'val');
+    set('s-cf',  calibration ? 'true  (calibrating…)' : 'false (DONE!)', calibration ? 'warn' : 'ok');
+
+    // Move red dot
+    const dot = document.getElementById('gaze-dot');
+    dot.style.left = x + 'px'; dot.style.top = y + 'px';
+    dot.style.display = 'block';
+
+    // Detect calibration completion
+    if (!calibration && !calDone) {
+      calDone = true;
+      log('✅ CALIBRATION COMPLETE — flag = false', 'lgd');
+      set('s-done', 'YES ✓', 'ok');
+    }
+  }
+
+  /* ══════════════════════════════════
+     ③ INSPECT DOM
+  ══════════════════════════════════ */
+  function checkDOM() {
+    log('═══ DOM Inspection ═══', 'lev');
+
+    const ids = ['video', 'cursor', 'calib_cursor', 'logoDivEyeGestures',
+                 'output_canvas', 'calibrationOverlay', 'status', 'error'];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) {
+        log(`  #${id}: NOT FOUND`, 'lwn');
+      } else {
+        const s = el.style;
+        log(`  #${id}: display="${s.display}" left="${s.left}" top="${s.top}"`, 'lcn');
+      }
+    });
+
+    const vid = document.getElementById('video');
+    if (vid) {
+      log(`  video.readyState=${vid.readyState} paused=${vid.paused} srcObject=${!!vid.srcObject}`, 'lcn');
+    }
+  }
+
+  /* ══════════════════════════════════
+     ④ RECALIBRATE
+  ══════════════════════════════════ */
+  function doRecal() {
+    if (!gestures) { log('No EyeGestures instance yet', 'lwn'); return; }
+    gestures.recalibrate();
+    calDone = false;
+    set('s-done', 'NO (recalibrating)', 'warn');
+    log('recalibrate() called — calib_counter reset to 0', 'lev');
+  }
+
+  /* ══════════════════════════════════
+     HELPER
+  ══════════════════════════════════ */
+  function set(id, text, cls) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className   = cls || '';
+  }
+  </script>
+</body>
+</html>

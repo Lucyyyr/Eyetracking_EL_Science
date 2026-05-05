@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Benny the Icicle — Eye Tracking Study</title>
+
+  <!-- EyeGestures dependencies (ml.js must come first) -->
+  <script src="https://www.lactame.com/lib/ml/6.0.0/ml.min.js"></script>
+  <link  rel="stylesheet" href="https://eyegestures.com/eyegestures.css">
+  <script src="https://eyegestures.com/eyegestures.js"></script>
+
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- Required by EyeGestures internally — must have id="video" -->
+  <video id="video" width="640" height="480" autoplay style="display:none;"></video>
+  <!-- EyeGestures calls getElementById('status'/'error') — must exist -->
+  <div id="status" style="display:none;"></div>
+  <div id="error"  style="display:none;"></div>
+
+  <!-- Red gaze dot (follows participant's eyes during story) -->
+  <div id="gaze-dot"></div>
+
+  <!-- Loading spinner (shown briefly while camera starts) -->
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <p id="loading-msg">Loading…</p>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════
+       SCREEN 1 — WELCOME
+  ══════════════════════════════════════════════════ -->
+  <div id="screen-welcome" class="screen active">
+    <h1>🧊 Benny the Icicle</h1>
+    <p class="subtitle">Eye tracking reading study</p>
+    <p class="note">
+      <strong>Before you begin:</strong> make sure this page is served from
+      <code>http://localhost:8000</code> or HTTPS — the camera will not work
+      on a plain <code>file://</code> URL.
+    </p>
+    <button class="btn-primary" onclick="initTracker()">
+      Allow Camera &amp; Begin
+    </button>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════
+       SCREEN 2 — CALIBRATION BACKING
+       EyeGestures overlays its own instruction / dot UI
+       on top of this screen automatically.
+  ══════════════════════════════════════════════════ -->
+  <div id="screen-calibrate" class="screen">
+    <p id="calib-instruction">Follow each dot with your eyes — keep your head still</p>
+    <p id="calib-progress" style="margin-top:12px; font-size:0.85rem; opacity:0.5;">
+      Calibration will begin after you click Continue on the overlay above.
+    </p>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════
+       SCREEN 3 — MODE SELECTION
+       Shown automatically after calibration completes.
+  ══════════════════════════════════════════════════ -->
+  <div id="screen-mode" class="screen">
+    <h2>Choose a condition</h2>
+    <div class="mode-cards">
+
+      <div class="mode-card" onclick="startStory('text')">
+        <div class="mode-preview-text">Aa</div>
+        <h3>Text Only</h3>
+        <p>Read the story with text only, no images.</p>
+      </div>
+
+      <div class="mode-card" onclick="startStory('picture')">
+        <div class="mode-preview-pic">🖼<span>+ text</span></div>
+        <h3>Text + Picture</h3>
+        <p>Read with a story illustration on each page.</p>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════
+       SCREEN 4 — STORY
+  ══════════════════════════════════════════════════ -->
+  <div id="screen-story" class="screen">
+
+    <div id="story-header">
+      <span id="story-page-label">Page 1 / 10</span>
+      <div id="story-progress-bar-wrap">
+        <div id="story-progress-bar" style="width:10%"></div>
+      </div>
+      <span id="story-data-count"></span>
+    </div>
+
+    <div id="page-timer-wrap"><div id="page-timer-bar"></div></div>
+
+    <!-- Text sits above the image (image hidden in text mode) -->
+    <div id="page-content">
+      <p id="story-text"></p>
+
+      <div id="image-slot">
+        <img id="image-slot-img" src="" alt="Story illustration">
+        <div id="image-slot-placeholder">
+          <div class="icon">🖼</div>
+          <div class="label" id="image-slot-label">Image for page 1</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="story-nav">
+      <button class="nav-btn" id="btn-prev" onclick="navigate(-1)" disabled>← Back</button>
+      <span id="key-hint">or use ← → arrow keys</span>
+      <button class="nav-btn" id="btn-next" onclick="navigate(1)">Next →</button>
+    </div>
+
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════
+       SCREEN 5 — END
+  ══════════════════════════════════════════════════ -->
+  <div id="screen-end" class="screen">
+    <h2>🎉 The End!</h2>
+    <p id="end-summary"></p>
+    <div class="end-buttons">
+      <button class="btn-download" onclick="downloadCSV()">⬇ Download Gaze Data</button>
+      <button class="btn-secondary" onclick="location.reload()">↩ Start Again</button>
+    </div>
+  </div>
+
+
+  <!-- Scripts — order matters -->
+  <script src="data/story.js"></script>       <!-- SENTENCES array        -->
+  <script src="js/config_shared.js"></script>  <!-- shared settings        -->
+  <script src="js/config_picture.js"></script> <!-- IMAGE_PATHS array      -->
+  <script src="js/tracker.js"></script>        <!-- EyeGestures + gaze log -->
+  <script src="js/story.js"></script>          <!-- page rendering + CSV   -->
+
+</body>
+</html>
