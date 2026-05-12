@@ -8,8 +8,8 @@ A browser-based eye tracking experiment for reading research. Participants read 
 
 | Condition | File | Description |
 |-----------|------|-------------|
-| Text only | `text_condition.html` | Sentence displayed at a fixed position, no image |
-| Text + Picture | `picture_condition.html` | Same sentence position, with a story illustration above |
+| Text + Emoji | `text_condition.html` | Sentence displayed at a fixed position, with Emoji style illustration |
+| Text + Picture | `picture_condition.html` | Same sentence position, with a story illustration on the side |
 
 Both conditions use identical font, font size, text colour, background colour, and text position so that any differences in gaze behaviour are attributable to the presence or absence of the image.
 
