@@ -1,6 +1,6 @@
 # Benny the Icicle — Eye Tracking Reading Study
 
-A browser-based eye tracking experiment for reading research. Participants read a 10-page illustrated story ("Benny the Icicle") in one of two conditions while their gaze is recorded via webcam using a custom landmark-based gaze tracker built on [MediaPipe Tasks Vision](https://developers.google.com/mediapipe). Gaze data is exported as a CSV at the end of each session.
+A browser-based eye tracking experiment for reading research. Participants read a 10-page story ("Benny the Icicle") in one of two conditions while their gaze is recorded via webcam using a custom landmark-based gaze tracker built on [MediaPipe Tasks Vision](https://developers.google.com/mediapipe). Gaze data is exported as a CSV at the end of each session.
 
 ---
 
@@ -8,10 +8,10 @@ A browser-based eye tracking experiment for reading research. Participants read 
 
 | Condition | File | Description |
 |-----------|------|-------------|
-| Text + Emoji | `text_condition.html` | Sentence displayed at a fixed position, with Emoji style illustration |
-| Text + Picture | `picture_condition.html` | Same sentence position, with a story illustration on the side |
+| Text + Emoji | `text_condition.html` | Sentence on the left half; an emoji image on the right half in the same slot as the picture condition |
+| Text + Picture | `picture_condition.html` | Same sentence position; story illustration on the right half |
 
-Both conditions use identical font, font size, text colour, background colour, and text position so that any differences in gaze behaviour are attributable to the presence or absence of the image.
+Both conditions use identical font, font size, text colour, background colour, and text position so that any differences in gaze behaviour are attributable to the presence or absence of the illustration.
 
 ---
 
@@ -33,18 +33,18 @@ http://localhost:8000
 
 **Step 3 — flow:**
 
-1. Click **Allow Camera & Begin**
-2. Get your head inside the green box on the position-check screen, then click **Continue**
+1. Click **Allow Camera & Begin** — the MediaPipe face mesh model loads immediately (a one-time download ~10 MB; subsequent sessions use the browser cache).
+2. Position your head inside the green box on the camera preview screen. A white rectangle shows the detected face boundary; the status message turns green when your face is fully inside the box. Click **Continue** when ready (clicking before positioning is also allowed — the face check is advisory).
 3. Calibration runs in two click rounds (~30 s total):
-    1. **Static round** (head centered): 13 red crosses appear one at a time. Click each cross center while looking at it. After each click, the cross stays visible for 1 second — keep looking at it during that hold so the tracker can collect extra training samples.
-    2. **Edge-check round** (head re-centered): 4 corner click targets, same click-then-hold flow.
-
-    The previous head-pose / head-position rounds were dropped: the regression now uses a WebGazer-style 6-input pupil-only model (bias + linear pupil + quadratic pupil terms), so head-movement training samples no longer carry any information the model can use. Head pose is still tracked every frame and exported in the CSV — it's just not a regression input.
-4. Validation (WebGazer-style accuracy scoring): 8 deterministic targets, shuffled per session, with a brief gap between points. Each cross is shown for 5 seconds; every valid frame during that window is scored against a 10 % acceptance ring, and per-point accuracy is the fraction of frames inside the ring. The cross turns green whenever your gaze is currently inside the ring (live visual feedback only — the score window keeps running). During validation your gaze is shown as a fading heatmap so fixations build clear hotspots while old trails decay.
-5. After all points, the session-mean accuracy must be at least 75 %; otherwise the score is shown briefly and calibration restarts automatically from the static round.
-6. Choose a condition (Text Only or Text + Picture)
-7. Participant reads the 10-page story; pages auto-advance every 5 seconds
-8. Click **Download Gaze Data** at the end to save the CSV
+    - **Static round** (13 targets): red crosses appear one at a time across the screen. Click each cross while looking at it. After the click the cross stays for 1 s — keep looking during that hold so the tracker can collect extra training samples.
+    - **Edge-check round** (4 corner targets): same click-then-hold flow at the screen corners.
+4. **Validation** (8 shuffled targets): each cross is shown for 5 s. Every valid frame is scored against a 10 % acceptance ring; per-point accuracy is the fraction of frames inside the ring. The cross turns green when your gaze is currently inside the ring (live feedback only). A fading heatmap shows gaze during validation so fixations build as warm hotspots.
+5. After all 8 points the session-mean accuracy is computed:
+    - **≥ 75 %** — passes automatically; click **Continue** to proceed.
+    - **< 75 %** — shows the accuracy and offers two options: **Restart calibration** (recommended) or **Proceed with current calibration** (use if the accuracy is borderline and re-doing is impractical).
+6. Choose a condition (**Text + Emoji** or **Text + Picture**).
+7. Participant reads the 10-page story; pages auto-advance after a fixed duration.
+8. Click **Download Gaze Data** at the end to save the CSV.
 
 ---
 
@@ -54,36 +54,38 @@ http://localhost:8000
 Eye_tracking_L2/
 │
 ├── index.html                  # Main entry point — full integrated flow
-│                               # (calibration → mode select → story → export)
+│                               # (camera → position check → calibration →
+│                               #  validation → mode select → story → export)
 │
-├── text_condition.html         # Stimulus preview — text condition, no tracker
-├── picture_condition.html      # Stimulus preview — picture condition, no tracker
-├── calibration_test.html       # Legacy EyeGestures debug page (no longer wired)
+├── text_condition.html         # Stimulus preview — text + emoji, no tracker
+├── picture_condition.html      # Stimulus preview — text + picture, no tracker
+├── calibration_test.html       # Developer debug page — runs the full calibration
+│                               # and validation pipeline with face mesh overlay
 │
 ├── css/
-│   └── styles.css              # All styles — shared across both conditions
+│   └── styles.css              # All styles — shared across all pages
 │
 ├── js/
 │   ├── tracker.js              # Landmark-based gaze tracker (MediaPipe FaceLandmarker)
 │   ├── story.js                # Page rendering, navigation, auto-advance, CSV export
-│   ├── config_shared.js        # Shared settings (story title, timer duration)
-│   └── config_picture.js       # Image paths for the picture condition
+│   ├── config_shared.js        # Shared settings (story title, calibration positions)
+│   ├── config_picture.js       # Image paths for the picture condition
+│   └── config_text.js          # Emoji image paths for the text + emoji condition
 │
 ├── data/
 │   └── story.js                # SENTENCES array — single source of truth for story text
 │
 ├── storyimage/
-│   ├── page1.png … page10.png  # One illustration per story page
-│   └── main.png                # Cover / splash image
+│   ├── page1.png … page10.png           # Story illustrations (picture condition)
+│   ├── emoji_page1.png … emoji_page10.png  # Emoji images (text condition)
+│   └── main.png                         # Cover / splash image
 │
 ├── font/
 │   └── freshjam.otf            # Display font used throughout the study
 │
-├── vendor/
-│   └── README.md               # How to vendor the MediaPipe model for offline / Pavlovia hosting
-│
-└── mediapipe/                  # Legacy WebGazer face-mesh assets (unused)
-    └── face_mesh/
+└── vendor/
+    └── README.md               # How to vendor the MediaPipe model for offline /
+                                # Pavlovia hosting
 ```
 
 ---
@@ -98,61 +100,67 @@ benny_gaze_YYYY-MM-DD_HH-MM-SS.csv
 
 | Column | Description |
 |--------|-------------|
-| `timestamp_ms` | Milliseconds since the story started |
-| `page_number` | Page the participant was reading (1–10) |
-| `gaze_x` | Horizontal gaze position in screen pixels |
-| `gaze_y` | Vertical gaze position in screen pixels |
-| `fixation_duration_ms` | How long the gaze has stayed within ~5 px of the current fixation centroid (ms). Resets to 0 when gaze moves more than 5 px. |
-| `AOI` | Area of Interest: `text` (sentence), `image` (illustration, picture condition only), or `other` |
-| `AOI_duration_ms` | How long the gaze has been continuously in the current AOI (ms). Resets to 0 on AOI change or new page. |
+| `t` | Milliseconds since the story started |
+| `page` | Page the participant was reading (1–10) |
+| `x` | Horizontal gaze position in screen pixels |
+| `y` | Vertical gaze position in screen pixels |
+| `fixation_duration` | How long gaze has stayed within ~5 px of the current fixation centroid (ms). Resets to 0 when gaze moves more than 5 px. |
+| `aoi` | Area of Interest: `text`, `image`, or `other` |
+| `aoi_duration` | How long gaze has been continuously in the current AOI (ms). Resets on AOI change or new page. |
 | `sentence` | The sentence shown on that page |
 | `mode` | Condition: `text` or `picture` |
-| `screen_w` | Browser viewport width when the sample was recorded |
-| `screen_h` | Browser viewport height when the sample was recorded |
-| `mouse_x` | Last known mouse x position, for debugging alignment |
-| `mouse_y` | Last known mouse y position, for debugging alignment |
-| `left_pupil_x`, `left_pupil_y`, `right_pupil_x`, `right_pupil_y` | Pupil image position from the JS-centroid detector — image-normalized 0–1. This is the value the regression mapper sees. Frames where either eye fails detection are dropped, so these columns are never blank for emitted rows. |
-| `head_x`, `head_y` | Head location in the camera frame, normalized 0–1. |
-| `head_size` | Eye-outer distance in normalized image space, used as a webcam z-distance proxy. Larger generally means closer to the camera. |
+| `screen_w` | Browser viewport width at sample time |
+| `screen_h` | Browser viewport height at sample time |
+| `mouse_x`, `mouse_y` | Last known mouse position (debugging aid) |
+| `left_pupil_x`, `left_pupil_y`, `right_pupil_x`, `right_pupil_y` | Pupil position in image-normalised 0–1 coordinates from the JS-centroid detector. Frames where either eye fails detection are dropped; these columns are never blank for emitted rows. |
+| `head_x`, `head_y` | Head location in the camera frame, normalised 0–1. |
+| `head_size` | Eye-outer distance in normalised image space — a webcam z-distance proxy (larger = closer). |
 | `head_yaw`, `head_pitch`, `head_roll` | Head pose in radians from MediaPipe's facial transformation matrix. |
-| `blink` | 1 when both eyes are estimated as closed for this frame, else 0. |
+| `blink` | 1 when both eyes are estimated closed for this frame, else 0. |
 | `eye_openness` | Average eye openness from MediaPipe blendshapes (0 = closed, 1 = open). |
-| `face_detected` | 1 if face was detected in the frame, else 0. |
+| `face_detected` | 1 if a face was detected in the frame, else 0. |
 
 ---
 
 ## Editing the Study
 
 ### Change the story text
-Edit `data/story.js`. Both conditions load this file automatically — one string per page.
+Edit `data/story.js`. All pages load this file automatically — one string per page. Keep the count in sync with `config_picture.js` and `config_text.js`.
 
-### Change the images
+### Change the story illustrations (picture condition)
 Replace the `.png` files in `storyimage/` and/or update the paths in `js/config_picture.js`.
 
+### Change the emoji images (text condition)
+Replace the `emoji_page#.png` files in `storyimage/` and/or update the paths in `js/config_text.js`.
+
 ### Change how long each page is shown
-Edit `PAGE_DURATION_MS` in `js/story.js` (default is 5000 ms = 5 seconds).
+Edit `PAGE_DURATION_MS` in `js/story.js`.
 
 ### Change text position
-In `css/styles.css`, find `#story-text` and adjust the `top` value (currently `65%`).
+In `css/styles.css`, find `#story-text` and adjust the `top` and `left` values.
 
-### Change image position
-In `css/styles.css`, find `#screen-story.mode-picture #image-slot` and adjust the `top` value (currently `calc(65% - 320px)`).
+### Change the image / emoji slot position
+In `css/styles.css`, find `#screen-story.mode-picture #image-slot` (picture condition) or `#emoji-slot` (text condition) and adjust the positioning.
 
 ### Change font
 Replace `font/freshjam.otf` and update the `@font-face` `src` at the top of `css/styles.css`.
+
+### Change calibration targets
+Edit `CALIB_POSITIONS` in `js/config_shared.js`. Each entry is `[left%, top%]` as a percentage of the viewport.
 
 ---
 
 ## Technical Notes
 
-- **Eye tracker:** custom landmark tracker built on [MediaPipe Tasks Vision FaceLandmarker](https://developers.google.com/mediapipe/solutions/vision/face_landmarker). The model and runtime load from jsdelivr by default. To run fully offline (or pin a version for research), see `vendor/README.md` and override the constants at the top of `js/tracker.js`.
-- **Camera flow:** the first **Allow Camera & Begin** click opens one camera stream that is reused for the head-position check, calibration, validation, and recording.
-- **Calibration:** the mapping is trained from centered click samples, head-pose samples (yaw / pitch / roll), head-position samples (`x`, `y`, and head-size z proxy), and a final centered edge check. A polynomial regression maps pupil + head-state features to screen coordinates.
-- **Validation:** 8 deterministic, shuffled targets, WebGazer-style. Each point is shown for 5 s; per-point accuracy = fraction of valid frames whose smoothed gaze fell inside a 10 % acceptance radius (relative to the smaller viewport dimension). Session-mean accuracy must be ≥ 75 % to pass; otherwise calibration restarts automatically.
-- **Pupil source:** the regressor uses a pure-JS dark-pixel centroid computed inside each eye crop. MediaPipe's iris landmark is used only as the ROI prior that anchors the centroid (nothing else feeds the regressor). Frames where either eye fails detection are dropped so the calibration set stays self-consistent. There is no toggle; OpenCV.js was tried and removed (it was unstable in the browser and the pure-JS detector was more accurate in our setup).
-- **Pupil and blink data:** left/right pupil coordinates (JS centroid) and blink/openness are exported for every recorded frame.
+- **Eye tracker:** custom landmark tracker built on [MediaPipe Tasks Vision FaceLandmarker](https://developers.google.com/mediapipe/solutions/vision/face_landmarker). The model and WASM runtime load from jsDelivr by default. To run fully offline or pin a version for research, see `vendor/README.md` and override the URL constants at the top of `js/tracker.js`.
+- **Camera flow:** one camera stream is opened on "Allow Camera & Begin" and reused for the position check, calibration, validation, and recording phases.
+- **Position check:** always uses MediaPipe face landmarks (the same model used for gaze tracking). A green box and white face bounding box are drawn on the camera preview. The Continue button is always enabled; the status text guides the participant to position correctly before proceeding.
+- **Gaze dot:** hidden from the participant during the story. Gaze coordinates are still computed every frame and logged to the CSV.
+- **Calibration:** a polynomial regression maps JS-centroid pupil positions to screen coordinates. Click samples are collected at each target; a brief hold after each click collects additional training samples at the known screen position. Click distance tolerance is disabled — clicks anywhere on screen are accepted.
+- **Validation:** 8 deterministic shuffled targets, WebGazer-style scoring. Session-mean accuracy ≥ 75 % passes automatically. On failure the researcher can restart calibration or proceed with the current calibration without re-doing it.
+- **Pupil source:** a pure-JS dark-pixel centroid computed inside each eye crop, anchored by MediaPipe's iris landmark. Frames where either eye fails detection are dropped so the calibration set stays self-consistent.
 - **No server-side component:** all gaze data stays in the browser and is downloaded locally as CSV.
-- **Stimulus files** (`text_condition.html`, `picture_condition.html`) load without the tracker — useful for checking layout and timing without needing camera access.
+- **Stimulus preview files** (`text_condition.html`, `picture_condition.html`) load without the tracker — useful for checking layout and timing without needing camera access.
 
 ---
 
@@ -161,4 +169,4 @@ Replace `font/freshjam.otf` and update the `@font-face` `src` at the top of `css
 - Modern browser with webcam support (Chrome or Edge recommended)
 - Python 3 (for the local HTTP server)
 - Webcam
-- Serve via `localhost` or HTTPS (required for `getUserMedia`)
+- Served via `localhost` or HTTPS (required for `getUserMedia`)
