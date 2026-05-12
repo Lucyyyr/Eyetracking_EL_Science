@@ -5,20 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Benny the Icicle — Eye Tracking Study</title>
 
-  <!-- EyeGestures dependencies (ml.js must come first) -->
-  <script src="https://www.lactame.com/lib/ml/6.0.0/ml.min.js"></script>
-  <link  rel="stylesheet" href="https://eyegestures.com/eyegestures.css">
-  <script src="https://eyegestures.com/eyegestures.js"></script>
-
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
 
-  <!-- Required by EyeGestures internally — must have id="video" -->
+  <!-- Camera source for the head-position check and the gaze tracker -->
   <video id="video" width="640" height="480" autoplay style="display:none;"></video>
-  <!-- EyeGestures calls getElementById('status'/'error') — must exist -->
-  <div id="status" style="display:none;"></div>
-  <div id="error"  style="display:none;"></div>
 
   <!-- Red gaze dot (follows participant's eyes during story) -->
   <div id="gaze-dot"></div>
@@ -29,34 +21,56 @@
     <p id="loading-msg">Loading…</p>
   </div>
 
+  <!-- POPUP OVERLAY — used for countdown and button prompts -->
+  <div id="popup-overlay">
+    <div class="popup-box">
+      <p id="popup-message"></p>
+      <div id="popup-countdown"></div>
+      <div id="popup-buttons"></div>
+    </div>
+  </div>
+
 
   <!-- ══════════════════════════════════════════════════
        SCREEN 1 — WELCOME
   ══════════════════════════════════════════════════ -->
   <div id="screen-welcome" class="screen active">
     <h1>🧊 Benny the Icicle</h1>
-    <p class="subtitle">Eye tracking reading study</p>
-    <p class="note">
-      <strong>Before you begin:</strong> make sure this page is served from
-      <code>http://localhost:8000</code> or HTTPS — the camera will not work
-      on a plain <code>file://</code> URL.
-    </p>
-    <button class="btn-primary" onclick="initTracker()">
+    <p class="subtitle">Eye Tracking Reading Study</p>
+    <p class="subtitle">Do NOT Move Your Head During the Study</p>
+    <button class="btn-primary" onclick="
+      const el = document.documentElement;
+      (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || function(){}).call(el);
+      startPositionCheck();
+    ">
       Allow Camera &amp; Begin
     </button>
   </div>
 
 
   <!-- ══════════════════════════════════════════════════
-       SCREEN 2 — CALIBRATION BACKING
-       EyeGestures overlays its own instruction / dot UI
-       on top of this screen automatically.
+       SCREEN 1b — HEAD POSITION CHECK
+  ══════════════════════════════════════════════════ -->
+  <div id="screen-position" class="screen">
+    <p id="position-instruction">Make sure your head is inside the green box</p>
+    <p id="position-status">Looking for your face…</p>
+    <div id="position-canvas-wrap">
+      <canvas id="position-canvas"></canvas>
+    </div>
+    <button class="btn-primary" id="btn-proceed-calib" onclick="proceedToCalibration()" disabled>
+      Continue
+    </button>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════
+       SCREEN 2 — CALIBRATION + VALIDATION
+       The tracker draws its own fixation target and
+       acceptance ring on top of this screen.
   ══════════════════════════════════════════════════ -->
   <div id="screen-calibrate" class="screen">
-    <p id="calib-instruction">Follow each dot with your eyes — keep your head still</p>
-    <p id="calib-progress" style="margin-top:12px; font-size:0.85rem; opacity:0.5;">
-      Calibration will begin after you click Continue on the overlay above.
-    </p>
+    <p id="calib-instruction"></p>
+    <p id="calib-progress" style="margin-top:12px; font-size:0.85rem; opacity:0.5;"></p>
   </div>
 
 
@@ -70,8 +84,8 @@
 
       <div class="mode-card" onclick="startStory('text')">
         <div class="mode-preview-text">Aa</div>
-        <h3>Text Only</h3>
-        <p>Read the story with text only, no images.</p>
+        <h3>Text + Emoji</h3>
+        <p>Read the story with text only, with emoji.</p>
       </div>
 
       <div class="mode-card" onclick="startStory('picture')">
@@ -110,6 +124,8 @@
           <div class="label" id="image-slot-label">Image for page 1</div>
         </div>
       </div>
+
+      <div id="emoji-slot"><img id="emoji-slot-img" src="" alt=""></div>
     </div>
 
     <div id="story-nav">
@@ -138,7 +154,8 @@
   <script src="data/story.js"></script>       <!-- SENTENCES array        -->
   <script src="js/config_shared.js"></script>  <!-- shared settings        -->
   <script src="js/config_picture.js"></script> <!-- IMAGE_PATHS array      -->
-  <script src="js/tracker.js"></script>        <!-- EyeGestures + gaze log -->
+  <script src="js/config_text.js"></script>    <!-- EMOJI_PER_PAGE array   -->
+  <script src="js/tracker.js"></script>        <!-- landmark gaze tracker  -->
   <script src="js/story.js"></script>          <!-- page rendering + CSV   -->
 
 </body>

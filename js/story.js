@@ -110,6 +110,14 @@ function _renderPage() {
   // Start the 8-second countdown for this page
   _startPageTimer();
 
+  // Emoji slot (text mode only)
+  if (window.currentMode === 'text') {
+    const imgEl = document.getElementById('emoji-slot-img');
+    if (imgEl && typeof EMOJI_PER_PAGE !== 'undefined') {
+      imgEl.src = EMOJI_PER_PAGE[window.currentPage] ?? '';
+    }
+  }
+
   // Image slot (picture mode only)
   if (window.currentMode === 'picture') {
     const imgPath = IMAGE_PATHS[window.currentPage] ?? null;
@@ -168,9 +176,19 @@ function downloadCSV() {
     return;
   }
 
-  const header = 'timestamp_ms,page_number,gaze_x,gaze_y,fixation_duration_ms,AOI,AOI_duration_ms,sentence,mode\n';
+  const header =
+    'timestamp_ms,page_number,gaze_x,gaze_y,fixation_duration_ms,AOI,AOI_duration_ms,' +
+    'sentence,mode,screen_w,screen_h,mouse_x,mouse_y,' +
+    'left_pupil_x,left_pupil_y,right_pupil_x,right_pupil_y,' +
+    'head_x,head_y,head_size,head_yaw,head_pitch,head_roll,' +
+    'blink,eye_openness,face_detected\n';
   const rows   = window.gazeData.map(d =>
-    `${d.t},${d.page},${d.x},${d.y},${d.fixation_duration},${d.aoi},${d.aoi_duration},"${d.sentence.replace(/"/g, '""')}",${d.mode}`
+    `${d.t},${d.page},${d.x},${d.y},${d.fixation_duration},${d.aoi},${d.aoi_duration},` +
+    `"${d.sentence.replace(/"/g, '""')}",${d.mode},${d.screen_w},${d.screen_h},` +
+    `${d.mouse_x ?? ''},${d.mouse_y ?? ''},` +
+    `${d.left_pupil_x ?? ''},${d.left_pupil_y ?? ''},${d.right_pupil_x ?? ''},${d.right_pupil_y ?? ''},` +
+    `${d.head_x ?? ''},${d.head_y ?? ''},${d.head_size ?? ''},${d.head_yaw ?? ''},${d.head_pitch ?? ''},${d.head_roll ?? ''},` +
+    `${d.blink ?? ''},${d.eye_openness ?? ''},${d.face_detected ?? ''}`
   ).join('\n');
 
   const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });

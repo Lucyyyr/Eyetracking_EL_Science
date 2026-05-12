@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gaze Heatmap — Benny the Icicle</title>
+  <style>
+    @font-face {
+      font-family: 'FreshJam';
+      src: url('font/freshjam.otf') format('opentype');
+      font-weight: normal; font-style: normal;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e; color: #ccc;
+      height: 100vh; display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+
+    #topbar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 8px 16px;
+      background: #111122; border-bottom: 1px solid #2a2a4a;
+      flex-shrink: 0;
+    }
+    #topbar h1 { font-size: 0.9rem; color: #a8d8ff; white-space: nowrap; }
+    .sep { color: #333; }
+
+    .ctrl { display: flex; align-items: center; gap: 5px; }
+    .ctrl label { font-size: 0.72rem; color: #777; white-space: nowrap; }
+
+    select, input[type=number], input[type=range] {
+      background: #222238; color: #ccc;
+      border: 1px solid #3a3a5a; border-radius: 4px;
+      padding: 3px 7px; font-size: 0.72rem; cursor: pointer;
+    }
+    input[type=number] { width: 68px; }
+    input[type=range]  { padding: 0; width: 70px; cursor: pointer; }
+
+    .btn {
+      padding: 4px 11px; font-size: 0.72rem;
+      border-radius: 4px; border: none; cursor: pointer; white-space: nowrap;
+    }
+    .btn-load   { background: #4a90d9; color: #fff; }
+    .btn-load:hover { background: #357abd; }
+    .btn-export { background: #2d6a4f; color: #fff; }
+    .btn-export:hover { background: #1b4332; }
+    .btn-export:disabled { opacity: 0.35; cursor: default; }
+    #file-input { display: none; }
+
+    #status {
+      font-size: 0.7rem; padding: 3px 9px; border-radius: 4px;
+      background: #1e1e38; color: #888; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; max-width: 360px;
+    }
+    #status.ok  { color: #7de8a0; }
+    #status.err { color: #f88; }
+
+    #canvas-wrap {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      padding: 12px; overflow: hidden;
+    }
+    #heatmap-canvas {
+      max-width: 100%; max-height: 100%;
+      border-radius: 6px; display: block;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.7);
+    }
+
+    #legend {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 14px; background: #111122;
+      border-top: 1px solid #2a2a4a; flex-shrink: 0;
+      font-size: 0.68rem; color: #555;
+    }
+    #legend-bar {
+      width: 130px; height: 7px; border-radius: 3px;
+      background: linear-gradient(to right,
+        #0000ff, #00ffff, #00ff00, #ffff00, #ff4400);
+    }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>🧊 Gaze Heatmap</h1>
+  <span class="sep">|</span>
+
+  <input type="file" id="file-input" accept=".csv">
+  <button class="btn btn-load" onclick="document.getElementById('file-input').click()">📂 Load CSV</button>
+
+  <span class="sep">|</span>
+
+  <div class="ctrl">
+    <label>Page</label>
+    <select id="sel-page">
+      <option value="all">All</option>
+    </select>
+  </div>
+
+  <!-- Hidden defaults -->
+  <input type="number" id="inp-sw" value="1440" style="display:none">
+  <input type="number" id="inp-sh" value="900"  style="display:none">
+  <input type="range"  id="rng-radius" min="10" max="150" value="45" style="display:none">
+  <input type="range"  id="rng-int"   min="1"  max="30"  value="8"  style="display:none">
+
+  <button class="btn btn-export" id="btn-export" disabled onclick="exportPNG()">⬇ PNG</button>
+
+  <div id="status">Load a CSV to begin</div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="heatmap-canvas"></canvas>
+</div>
+
+<div id="legend">
+  <span>Low</span><div id="legend-bar"></div><span>High</span>
+  &nbsp;·&nbsp; <span style="color:#aaa">Background mimics the actual story page layout</span>
+</div>
+
+<script>
+'use strict';
+
+const SENTENCES = [
+  "Meet Benny. Benny is a solid, clear icicle hanging from a house",
+  "The bright, hot sun comes up and shines on Benny",
+  "Benny feels funny. His solid top starts to melt!",
+  "Oh, no! Benny slides down the roof and splashes into a puddle",
+  "Now, Benny is liquid water. He is a little puddle",
+  "The sun stays very hot. Benny the Puddle gets warmer and warmer",
+  "Suddenly, Benny starts to change into white, invisible gas!",
+  "Benny the Gas floats up, up, up into the blue sky",
+  "High up, the air is cold. Benny the Gas turns into a fluffy cloud",
+  "Benny is gone, but he will return soon when the rain falls!",
+];
+
+let allPoints = [];
+
+const canvas = document.getElementById('heatmap-canvas');
+const ctx    = canvas.getContext('2d');
+
+/* ── Preload story images ── */
+const STORY_IMAGES = Array.from({ length: 10 }, (_, i) => {
+  const img = new Image();
+  img.src = `storyimage/page${i + 1}.png`;
+  img.onload = () => { if (allPoints.length) render(); };
+  return img;
+});
+
+/* ── helpers ── */
+function setStatus(msg, cls = '') {
+  const el = document.getElementById('status');
+  el.textContent = msg; el.className = cls;
+}
+function getScreenW() { return parseInt(document.getElementById('inp-sw').value) || 1440; }
+function getScreenH() { return parseInt(document.getElementById('inp-sh').value) || 900;  }
+
+/* ── CSV parser (robust: BOM, \r\n, quoted commas) ── */
+function parseCSV(raw) {
+  raw = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = raw.trim().split('\n');
+  if (lines.length < 2) return [];
+
+  const hdr = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const col  = name => hdr.indexOf(name.toLowerCase());
+
+  const iX  = col('gaze_x'),      iY   = col('gaze_y');
+  const iPg = col('page_number'), iFix = col('fixation_duration_ms');
+  const iAo = col('aoi'),         iMd  = col('mode');
+  const iSw = col('screen_w'),    iSh  = col('screen_h');
+
+  console.log('Headers:', hdr.join(', '));
+  if (iX === -1 || iY === -1) {
+    setStatus('Missing gaze_x / gaze_y columns', 'err'); return [];
+  }
+
+  // Read screen size from first data row if available
+  let csvScreenW = 0, csvScreenH = 0;
+
+  const pts = [];
+  for (let li = 1; li < lines.length; li++) {
+    const line = lines[li].trim();
+    if (!line) continue;
+
+    // Split respecting quoted fields
+    const fields = [];
+    let cur = '', inQ = false;
+    for (const c of line) {
+      if (c === '"') { inQ = !inQ; continue; }
+      if (c === ',' && !inQ) { fields.push(cur); cur = ''; continue; }
+      cur += c;
+    }
+    fields.push(cur);
+
+    const x = parseFloat(fields[iX]);
+    const y = parseFloat(fields[iY]);
+    if (isNaN(x) || isNaN(y)) continue;
+
+    if (iSw !== -1 && csvScreenW === 0) {
+      csvScreenW = parseInt(fields[iSw]) || 0;
+      csvScreenH = parseInt(fields[iSh]) || 0;
+    }
+
+    pts.push({
+      x, y,
+      page:   iPg  !== -1 ? parseInt(fields[iPg])   : 1,
+      fixDur: iFix !== -1 ? parseFloat(fields[iFix]) : 1,
+      aoi:    iAo  !== -1 ? fields[iAo].trim()       : 'other',
+      mode:   iMd  !== -1 ? fields[iMd].trim()       : 'text',
+    });
+  }
+
+  // Auto-fill screen inputs from CSV if present
+  if (csvScreenW > 0) {
+    document.getElementById('inp-sw').value = csvScreenW;
+    document.getElementById('inp-sh').value = csvScreenH;
+    setStatus(`Screen dims read from CSV: ${csvScreenW}×${csvScreenH}`, 'ok');
+  } else {
+    setStatus('screen_w/h not in CSV — set manually above', '');
+  }
+
+  return pts;
+}
+
+/* ── File load ── */
+document.getElementById('file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  setStatus('Reading…');
+  const reader = new FileReader();
+  reader.onerror = () => setStatus('Read failed', 'err');
+  reader.onload  = ev => {
+    try {
+      allPoints = parseCSV(ev.target.result);
+      if (!allPoints.length) return;
+
+      // Populate page selector
+      const pages = [...new Set(allPoints.map(p => p.page))].sort((a, b) => a - b);
+      const sel = document.getElementById('sel-page');
+      sel.innerHTML = '<option value="all">All</option>';
+      pages.forEach(pg => {
+        const o = document.createElement('option');
+        o.value = pg; o.textContent = `Page ${pg}`; sel.appendChild(o);
+      });
+
+      document.getElementById('btn-export').disabled = false;
+      setStatus(`${allPoints.length.toLocaleString()} samples · ${pages.length} pages`, 'ok');
+      render();
+    } catch(err) {
+      console.error(err);
+      setStatus('Error: ' + err.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+});
+
+/* ── Controls ── */
+document.getElementById('sel-page').addEventListener('change', render);
+
+/* ── Colormap: blue → cyan → green → yellow → red ── */
+function heatColor(t) {
+  const stops = [
+    [0, 0, 200], [0, 0, 255], [0, 200, 255],
+    [0, 255, 0], [255, 255, 0], [255, 60, 0], [180, 0, 0],
+  ];
+  const fi = t * (stops.length - 1);
+  const lo = Math.floor(fi), hi = Math.min(lo + 1, stops.length - 1);
+  const f  = fi - lo;
+  return stops[lo].map((v, i) => Math.round(v + (stops[hi][i] - v) * f));
+}
+
+/* ── Text wrap ── */
+function wrapText(c, text, cx, cy, maxW, lh) {
+  const words = text.split(' '), lines = [];
+  let cur = '';
+  for (const w of words) {
+    const t = cur ? cur + ' ' + w : w;
+    if (c.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; }
+    else cur = t;
+  }
+  if (cur) lines.push(cur);
+  const top = cy - (lines.length - 1) * lh / 2;
+  lines.forEach((l, i) => c.fillText(l, cx, top + i * lh));
+}
+
+/* ── Rounded rect path ── */
+function rrPath(c, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y); c.arcTo(x + w, y, x + w, y + r, r);
+  c.lineTo(x + w, y + h - r); c.arcTo(x + w, y + h, x + w - r, y + h, r);
+  c.lineTo(x + r, y + h); c.arcTo(x, y + h, x, y + h - r, r);
+  c.lineTo(x, y + r); c.arcTo(x, y, x + r, y, r);
+  c.closePath();
+}
+
+/* ── Main render ── */
+function render() {
+  if (!allPoints.length) return;
+
+  const pageVal = document.getElementById('sel-page').value;
+  const radius  = parseInt(document.getElementById('rng-radius').value);
+  const intMul  = parseFloat(document.getElementById('rng-int').value);
+  const scrW    = getScreenW();
+  const scrH    = getScreenH();
+
+  // Filter
+  const pts = allPoints.filter(p => {
+    if (pageVal !== 'all' && p.page !== parseInt(pageVal)) return false;
+    return true;
+  });
+
+  // AOI breakdown for status
+  const nT = pts.filter(p => p.aoi === 'text').length;
+  const nI = pts.filter(p => p.aoi === 'image').length;
+  const pct = n => pts.length ? Math.round(n / pts.length * 100) : 0;
+  setStatus(
+    `${pts.length.toLocaleString()} pts · text ${pct(nT)}%  image ${pct(nI)}%  other ${pct(pts.length-nT-nI)}%`, 'ok'
+  );
+
+  // Canvas resolution — match screen aspect ratio, cap at 1440px wide
+  const aspect = scrW / scrH;
+  let cW = Math.min(1440, scrW), cH = Math.round(cW / aspect);
+  if (cH > 900) { cH = 900; cW = Math.round(cH * aspect); }
+  canvas.width = cW; canvas.height = cH;
+
+  const sx = cW / scrW;   // screen px → canvas px
+  const sy = cH / scrH;
+
+  const isPic = pts.some(p => p.mode === 'picture');
+
+  /* ── Derived layout constants (mirror CSS exactly) ──────────────────
+     CSS reference:
+       #story-text  : left 25%, top 50%, width min(420px,44vw),
+                      font clamp(1.6rem,4vw,2.6rem), line-height 1.55
+       #image-slot  : left 75%, top 50%, width min(560px,46vw), height 420px,
+                      border-radius 16px
+       header       : top 0, height 48px  |  timer: top 48px, height 3px
+  ──────────────────────────────────────────────────────────────────── */
+  const REM      = 16;                              // browser default 1rem = 16px
+  const headerH  = Math.round(48 * sy);
+  const timerH   = Math.max(1, Math.round(3 * sy));
+
+  const tCX      = cW * 0.25;                      // left: 25% (transform centres it)
+  const tCY      = cH * 0.50;                      // top: 50%
+  const tBoxW    = Math.min(420 * sx, cW * 0.44);  // width: min(420px, 44vw)
+
+  // font-size: clamp(1.6rem, 4vw, 2.6rem) → in screen px, then scale to canvas
+  const fontSizeScrPx = Math.min(Math.max(1.6 * REM, 0.04 * scrW), 2.6 * REM);
+  const fontSize = Math.round(fontSizeScrPx * sx);
+  const lineH    = fontSize * 1.55;
+
+  const iCX      = cW * 0.75;                      // left: 75%
+  const iCY      = cH * 0.50;                      // top: 50%
+  const iBoxW    = Math.min(560 * sx, cW * 0.46);  // width: min(560px, 46vw)
+  const iBoxH    = Math.round(420 * sy);            // height: 420px (fixed in CSS)
+  const iRadius  = Math.round(16 * sx);             // border-radius: 16px
+
+  /* 1 ── PAGE BACKGROUND */
+  ctx.fillStyle = '#fafaf5';
+  ctx.fillRect(0, 0, cW, cH);
+
+  /* 2 ── IMAGE SLOT (picture mode) — drawn behind text */
+  if (isPic) {
+    const slotX = iCX - iBoxW / 2, slotY = iCY - iBoxH / 2;
+
+    // Slot fill (shown when no image or all-pages view)
+    ctx.fillStyle = '#f0f0ec';
+    rrPath(ctx, slotX, slotY, iBoxW, iBoxH, iRadius);
+    ctx.fill();
+
+    // Draw actual page image (single page selected)
+    if (pageVal !== 'all') {
+      const storyImg = STORY_IMAGES[parseInt(pageVal) - 1];
+      if (storyImg && storyImg.complete && storyImg.naturalWidth > 0) {
+        ctx.save();
+        rrPath(ctx, slotX, slotY, iBoxW, iBoxH, iRadius);
+        ctx.clip();
+        // cover-fit: scale image to fill slot, centred
+        const iw = storyImg.naturalWidth, ih = storyImg.naturalHeight;
+        const scale = Math.max(iBoxW / iw, iBoxH / ih);
+        const dw = iw * scale, dh = ih * scale;
+        ctx.drawImage(storyImg, slotX + (iBoxW - dw) / 2, slotY + (iBoxH - dh) / 2, dw, dh);
+        ctx.restore();
+      } else {
+        // Placeholder while image loads
+        ctx.fillStyle = 'rgba(180,180,180,0.5)';
+        ctx.font = `${Math.round(32 * sx)}px serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('🖼', iCX, iCY);
+      }
+    } else {
+      // All-pages view — generic placeholder
+      ctx.fillStyle = 'rgba(180,180,180,0.5)';
+      ctx.font = `${Math.round(32 * sx)}px serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🖼', iCX, iCY);
+    }
+
+    // Dashed border on top of image
+    ctx.save();
+    ctx.strokeStyle = 'rgba(187,187,187,0.7)';
+    ctx.lineWidth = Math.max(1.5, 2 * sx);
+    ctx.setLineDash([Math.round(6 * sx), Math.round(4 * sx)]);
+    rrPath(ctx, slotX, slotY, iBoxW, iBoxH, iRadius);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* 3 ── SENTENCE TEXT — FreshJam, same size/position as story page */
+  const sent = pageVal !== 'all' ? (SENTENCES[parseInt(pageVal) - 1] || '') : '';
+  ctx.fillStyle = '#222';
+  ctx.font = `${fontSize}px FreshJam, Georgia, serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (sent) {
+    wrapText(ctx, sent, tCX, tCY, tBoxW, lineH);
+  } else {
+    ctx.fillStyle = 'rgba(34,34,34,0.15)';
+    ctx.fillText('(all pages)', tCX, tCY);
+  }
+
+  /* 4 ── HEADER BAR */
+  ctx.fillStyle = 'rgba(250,250,245,0.92)';
+  ctx.fillRect(0, 0, cW, headerH);
+  ctx.strokeStyle = '#e0e0dc';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, headerH); ctx.lineTo(cW, headerH); ctx.stroke();
+
+  // Progress bar — CSS: flex: 1; margin: 0 20px; height: 4px
+  const pageNum  = pageVal !== 'all' ? parseInt(pageVal) : SENTENCES.length;
+  const progress = pageNum / SENTENCES.length;
+  const barLeft  = Math.round(24 * sx);          // padding: 14px 24px
+  const barRight = cW - Math.round(24 * sx);
+  const barW     = barRight - barLeft;
+  const barY     = Math.round(headerH / 2) - 2;
+  ctx.fillStyle = 'rgba(128,128,128,0.2)';
+  ctx.fillRect(barLeft, barY, barW, Math.round(4 * sy));
+  ctx.fillStyle = '#4a90d9';
+  ctx.fillRect(barLeft, barY, barW * progress, Math.round(4 * sy));
+
+  // Page label — CSS: font-size 0.85rem, FreshJam
+  const hFontSz = Math.round(0.85 * REM * sx);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.font = `${hFontSz}px FreshJam, Georgia, serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(pageVal !== 'all' ? `Page ${pageVal} / ${SENTENCES.length}` : 'All pages',
+               Math.round(24 * sx), headerH / 2);
+
+  // Gaze point count — right side
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.font = `${Math.round(0.75 * REM * sx)}px system-ui`;
+  ctx.fillText(`${pts.length.toLocaleString()} gaze points`, cW - Math.round(24 * sx), headerH / 2);
+
+  /* 5 ── TIMER BAR (full width — represents page start) */
+  ctx.fillStyle = '#4a90d9';
+  ctx.fillRect(0, headerH, cW, timerH);
+
+  if (!pts.length) {
+    setStatus('No data for this filter combination', 'err'); return;
+  }
+
+  /* 6 ── GAUSSIAN HEAT — accumulated into an offscreen canvas
+           so putImageData doesn't obliterate the scene below    */
+  const off  = document.createElement('canvas');
+  off.width  = cW; off.height = cH;
+  const octx = off.getContext('2d');
+
+  const heat   = new Float32Array(cW * cH);
+  const sigma2 = ((radius * 0.42) ** 2) * 2;
+  const r2     = radius * radius;
+
+  for (const pt of pts) {
+    const px = Math.round(pt.x * sx);
+    const py = Math.round(pt.y * sy);
+    const w  = Math.max(1, isNaN(pt.fixDur) ? 1 : pt.fixDur) * intMul;
+    const x0 = Math.max(0, px - radius), x1 = Math.min(cW - 1, px + radius);
+    const y0 = Math.max(0, py - radius), y1 = Math.min(cH - 1, py + radius);
+    for (let iy = y0; iy <= y1; iy++) {
+      const dy2 = (iy - py) ** 2;
+      for (let ix = x0; ix <= x1; ix++) {
+        const d2 = (ix - px) ** 2 + dy2;
+        if (d2 > r2) continue;
+        heat[iy * cW + ix] += w * Math.exp(-d2 / sigma2);
+      }
+    }
+  }
+
+  let maxH = 0;
+  for (let i = 0; i < heat.length; i++) if (heat[i] > maxH) maxH = heat[i];
+  if (maxH === 0) return;
+
+  /* 7 ── COLORISE into offscreen */
+  const img = octx.createImageData(cW, cH);
+  const d   = img.data;
+  for (let i = 0; i < heat.length; i++) {
+    if (heat[i] === 0) continue;
+    const t         = heat[i] / maxH;
+    const [r, g, b] = heatColor(t);
+    const a         = Math.round(Math.min(255, t * 290));
+    const p         = i * 4;
+    d[p] = r; d[p+1] = g; d[p+2] = b; d[p+3] = a;
+  }
+  octx.putImageData(img, 0, 0);
+
+  /* 8 ── COMPOSITE heatmap over scene (alpha blending preserved) */
+  ctx.drawImage(off, 0, 0);
+}
+
+/* ── Export ── */
+function exportPNG() {
+  const a = document.createElement('a');
+  a.download = `heatmap_page${document.getElementById('sel-page').value}.png`;
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+}
+
+/* Initial canvas placeholder */
+canvas.width = 800; canvas.height = 500;
+ctx.fillStyle = '#1e1e38';
+ctx.fillRect(0, 0, 800, 500);
+ctx.fillStyle = '#555'; ctx.font = '14px system-ui';
+ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+ctx.fillText('Load a gaze CSV to generate the heatmap', 400, 250);
+
+/* Re-render once FreshJam font is ready so text matches the story page */
+document.fonts.ready.then(() => { if (allPoints.length) render(); });
+</script>
+</body>
+</html>
