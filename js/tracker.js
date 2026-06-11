@@ -78,6 +78,22 @@ const CALIB_CLICK_WEIGHT         = 25;
 const CALIB_CONTINUOUS_WEIGHT    = 1;
 const CALIB_OUTLIER_TRIM_FRAC    = 0.12;
 
+/* Population-prior warm-start. When `tools/fit_population_prior.py` has
+   written `prior.json`, we (a) seed T.mapping with the prior so the
+   gaze cursor works pre-calibration, and (b) regularize each per-user
+   calibration fit toward the prior coefficients instead of toward 0.
+   The math is `min ||F·w − t||² + λ·||w − prior||²` — equivalent to a
+   Bayesian fit with a Gaussian prior centered on the population mean.
+   λ trades off prior vs. per-user clicks:
+     - λ ≈ 0   → ignore the prior, fit purely on per-user clicks.
+     - λ very large → the prior dominates; per-user clicks are ignored.
+   With ~30 click samples scaled to weight 25 each (≈750 total), a λ in
+   [10, 50] lets the clicks still dominate but keeps the prior anchoring
+   directions that have weak local evidence (e.g. head-size never varies
+   during a single calibration but does across the population). */
+const CALIB_PRIOR_LAMBDA   = 25;
+const PRIOR_URL            = 'tools/artifacts/results/prior.json';
+
 /* Where to source the pupil position from. Two implementations:
    - 'mediapipe': use MediaPipe FaceLandmarker's trained iris-center
      landmark (idx 468 / 473) directly. Robust to eyelid occlusion
@@ -341,7 +357,15 @@ const T = {
     holdSampleIndex:  0,
   },
 
-  mapping: null, // { wx: number[], wy: number[] }
+  mapping: null, // { wx: number[14], wy: number[14] }
+  /* Population prior loaded from PRIOR_URL once per session.
+     Shape: { wx: number[14], wy: number[14], featureNames: string[], ... }
+     When non-null, it (a) seeds T.mapping so the gaze cursor works
+     pre-calibration and (b) anchors the per-user calibration fit via
+     CALIB_PRIOR_LAMBDA. When null (offline / file missing / fetch
+     failed), the fit falls back to the pre-prior behavior. */
+  prior: null,
+  priorLoadPromise: null,
 
   val: {
     targets: [],
@@ -435,7 +459,13 @@ async function startPositionCheck() {
 
   setLoading('Loading face mesh model — this happens once per session.');
   try {
+    /* Kick off both fetches concurrently. The prior is small (~1 KB JSON)
+       and not load-bearing — if it 404s, _ensurePrior() returns null and
+       we fall back to per-session fit-from-scratch. The landmarker is
+       load-bearing, so we await it last. */
+    const priorTask = _ensurePrior();
     await _ensureFaceLandmarker();
+    await priorTask;
   } catch (err) {
     setLoading(null);
     alert('Could not load gaze model:\n' + (err.message || err) +
@@ -469,6 +499,81 @@ window.gazeStartCalibration = function () {
   showScreen('screen-calibrate');
   _beginCalibration();
 };
+
+/* ═══════════════════════════════
+   POPULATION PRIOR LOADER
+═══════════════════════════════ */
+/* Fetches the population-fit polynomial coefficients (wx, wy) once per
+   session and stashes them in T.prior. Also seeds T.mapping from the
+   prior so the gaze cursor renders pre-calibration. Failures are
+   non-fatal: the rest of the pipeline (per-session fit-from-scratch)
+   still works exactly as before if prior.json is missing.
+
+   The fetch is cached on a single Promise so concurrent callers (the
+   model loader, calibration finish) wait on the same network request. */
+async function _ensurePrior() {
+  if (T.prior) return T.prior;
+  if (T.priorLoadPromise) return T.priorLoadPromise;
+
+  T.priorLoadPromise = (async () => {
+    let payload;
+    try {
+      const resp = await fetch(PRIOR_URL, { cache: 'no-cache' });
+      if (!resp.ok) {
+        console.info(`[gaze] no population prior at ${PRIOR_URL} ` +
+                     `(HTTP ${resp.status}); falling back to per-session fit.`);
+        return null;
+      }
+      payload = await resp.json();
+    } catch (err) {
+      console.info(`[gaze] population prior fetch failed (${err.message || err}); ` +
+                   `falling back to per-session fit.`);
+      return null;
+    }
+
+    if (!payload || !Array.isArray(payload.wx) || !Array.isArray(payload.wy)) {
+      console.warn('[gaze] prior.json is malformed; ignoring.');
+      return null;
+    }
+    if (payload.wx.length !== payload.wy.length) {
+      console.warn('[gaze] prior.json wx/wy length mismatch; ignoring.');
+      return null;
+    }
+
+    /* Sanity check: prior dimension must equal our current featureVec
+       dimension. If not, we're probably reading a stale prior fit on a
+       different feature schema and silently mixing them would produce
+       garbage. Refuse to use it. */
+    const expectedDim = 14;
+    if (payload.wx.length !== expectedDim) {
+      console.warn(
+        `[gaze] prior.json wx length ${payload.wx.length} != expected ` +
+        `${expectedDim}; ignoring (rerun tools/fit_population_prior.py).`
+      );
+      return null;
+    }
+
+    T.prior = {
+      wx: payload.wx.slice(),
+      wy: payload.wy.slice(),
+      featureNames: payload.feature_names || null,
+      fitMeta: payload.fit || null,
+    };
+
+    /* Seed the mapping so the gaze cursor draws pre-calibration. The
+       per-session calibration fit (later) replaces this. */
+    if (!T.mapping) {
+      T.mapping = { wx: T.prior.wx.slice(), wy: T.prior.wy.slice() };
+      console.info('[gaze] seeded T.mapping from population prior ' +
+                   `(λ_prior=${CALIB_PRIOR_LAMBDA}, ` +
+                   `train pids=${(payload.train_pids || []).length}).`);
+    }
+    return T.prior;
+  })();
+
+  return T.priorLoadPromise;
+}
+
 
 /* ═══════════════════════════════
    MEDIAPIPE MODEL LOADER
@@ -548,16 +653,46 @@ function _handleLandmarks(result, ts) {
   T.lastLandmarks = lm;
 
   let blinkLeft = 0, blinkRight = 0;
+  let lookInL   = 0, lookOutL = 0, lookUpL = 0, lookDnL = 0;
+  let lookInR   = 0, lookOutR = 0, lookUpR = 0, lookDnR = 0;
   const bs = result.faceBlendshapes && result.faceBlendshapes[0];
   if (bs && bs.categories) {
     for (const c of bs.categories) {
-      if (c.categoryName === 'eyeBlinkLeft')  blinkLeft  = c.score;
-      if (c.categoryName === 'eyeBlinkRight') blinkRight = c.score;
+      switch (c.categoryName) {
+        case 'eyeBlinkLeft':     blinkLeft = c.score; break;
+        case 'eyeBlinkRight':    blinkRight = c.score; break;
+        case 'eyeLookInLeft':    lookInL   = c.score; break;
+        case 'eyeLookOutLeft':   lookOutL  = c.score; break;
+        case 'eyeLookUpLeft':    lookUpL   = c.score; break;
+        case 'eyeLookDownLeft':  lookDnL   = c.score; break;
+        case 'eyeLookInRight':   lookInR   = c.score; break;
+        case 'eyeLookOutRight':  lookOutR  = c.score; break;
+        case 'eyeLookUpRight':   lookUpR   = c.score; break;
+        case 'eyeLookDownRight': lookDnR   = c.score; break;
+      }
     }
   }
   const blink = (blinkLeft > BLINK_OPENNESS_THRESHOLD) &&
                 (blinkRight > BLINK_OPENNESS_THRESHOLD);
   const openness = 1 - (blinkLeft + blinkRight) / 2;
+
+  /* Pretrained per-eye gaze direction from the MediaPipe blendshape
+     model. Each eye reports four scalars in [0, 1] for In / Out / Up /
+     Down. "In" means toward the nose, so the per-eye sign convention
+     differs:
+       - left eye looks right  → lookInLeft  high (toward nose)
+       - right eye looks right → lookOutRight high (away from nose)
+     Combining both eyes into a single horizontal signal:
+       lookH = ((lookIn_L + lookOut_R) - (lookOut_L + lookIn_R)) / 2
+       lookV = ((lookDn_L + lookDn_R) - (lookUp_L + lookUp_R)) / 2
+     Positive lookH means looking right; positive lookV means looking
+     down. The regression sees these as supplements to the geometric
+     (ax, ay) features — they're often more robust to head pose
+     because the blendshape model has already factored head pose out
+     during training. */
+  const lookH = (lookInL + lookOutR - lookOutL - lookInR) / 2;
+  const lookV = (lookDnL + lookDnR - lookUpL  - lookUpR) / 2;
+  const eyeLook = { lookH, lookV };
 
   /* Head pose from facial transformation matrix (column-major 4x4). */
   let head = { yaw: 0, pitch: 0, roll: 0, available: false };
@@ -586,7 +721,7 @@ function _handleLandmarks(result, ts) {
      distance, so the regressor uses this to compensate. */
   const hSize = Math.hypot(rOuter.x - lOuter.x, rOuter.y - lOuter.y);
 
-  const features = _extractEyeFeatures(lm, head, hx, hy, hSize);
+  const features = _extractEyeFeatures(lm, head, hx, hy, hSize, eyeLook);
   T.lastFeatures = features; // may be null when JS pupil was requested but failed
   T.lastQuality  = {
     faceDetected: true,
@@ -772,7 +907,7 @@ function _detectPupilCentroid(eyeBox, irisPrior) {
 /* ═══════════════════════════════
    PUPIL / IRIS FEATURE EXTRACTION
 ═══════════════════════════════ */
-function _extractEyeFeatures(lm, head, hx, hy, hSize) {
+function _extractEyeFeatures(lm, head, hx, hy, hSize, eyeLook) {
   const lOuter = lm[IDX.leftEyeOuter];
   const lInner = lm[IDX.leftEyeInner];
   const lTop   = lm[IDX.leftEyeTop];
@@ -834,24 +969,33 @@ function _extractEyeFeatures(lm, head, hx, hy, hSize) {
   const ax = (lpx + rpx) / 2;
   const ay = (lpy + rpy) / 2;
 
-  /* Head-pose main effects. yaw / pitch are added back to the feature
-     vector as plain main effects (no ax / ay interactions). The earlier
-     full 18-D head-pose model collapsed into multicollinearity because
-     the *interaction* terms (ax × pitch, ay × yaw, …) were nearly
-     proportional to the primary ax / ay terms when head pose was near-
-     constant during the static round. The main effects alone don't
-     have that problem — they just shift the projection by a constant
-     proportional to the deviation from baseline pose, which is
-     exactly the compensation we need when the user lifts/drops their
-     head to look at the top/bottom rows of the screen. roll, hx, hy,
-     hSize stay out (they had no clear contribution and the regression
-     is already nicely over-determined at 8 features × 2 outputs vs
-     ~80 click samples). */
+  /* Head-pose main effects. yaw / pitch / roll and the head anchor
+     (hx, hy, hSize) are all added to the 14-D feature vector. roll /
+     hx / hy / hSize were historically dropped because, *within a
+     single seated session*, they barely vary during the static round
+     and look collinear with the bias term. But the population prior
+     (`prior.json`) is fit across ~40 different users / cameras /
+     postures, so those columns DO carry real signal across people —
+     they're how the prior compensates for the cohort's different head
+     framings without forcing the per-session fit to learn it. The per-
+     session Tikhonov-toward-prior fit will anchor head-pose columns to
+     the population values whenever per-user click evidence is weak. */
   const yaw   = head ? head.yaw   : 0;
   const pitch = head ? head.pitch : 0;
-  /* hx / hy / hSize are still set into T.lastHead and exported in the
-     CSV; they're just not regression inputs. */
-  void hx; void hy; void hSize;
+  const roll  = head ? head.roll  : 0;
+
+  /* MediaPipe-derived gaze direction from the eyeLook* blendshapes.
+     These are bounded in [-1, 1] (after the in/out and up/down
+     differencing in _handleLandmarks). They supplement (ax, ay) —
+     ax / ay are geometric pupil position relative to eye corners,
+     whereas lookH / lookV are the blendshape network's own learned
+     gaze direction estimate. The two signals carry overlapping but
+     not identical information: in our diagnostics ay has high
+     correlation with target_y but is noisy under partial eyelid
+     occlusion; the blendshape lookV stays well-defined even when
+     the iris is partially covered. */
+  const lookH = eyeLook ? eyeLook.lookH : 0;
+  const lookV = eyeLook ? eyeLook.lookV : 0;
 
   return {
     leftPupilImg:    { x: lPup.x, y: lPup.y },
@@ -859,22 +1003,25 @@ function _extractEyeFeatures(lm, head, hx, hy, hSize) {
     leftPupilEye:    { x: lpx,    y: lpy   },
     rightPupilEye:   { x: rpx,    y: rpy   },
     avgEye:          { x: ax,     y: ay    },
-    /* Feature vector for the regression mapper. 8-D model: bias +
-       linear and quadratic pupil terms + yaw / pitch main effects.
-       The yaw / pitch terms compensate for the user lifting or
-       dropping their head to look at the top / bottom of the screen
-       — without them the projection at the top and bottom rows
-       drifts by ~100 px because the iris-in-eye-corner coordinate
-       alone can't tell the difference between "iris moved within a
-       still head" and "iris stayed put while the head pitched."
-       Interaction terms (ax × pitch etc.) are deliberately *not*
-       included; they were the source of the previous multicollinear-
-       ity collapse. */
+    eyeLook:         { x: lookH,  y: lookV },
+    /* Feature vector for the regression mapper. 14-D model. Column
+       order MUST stay locked to tools/common.py FEATURE_NAMES so that
+       prior.json coefficients (wx / wy of length 14) match this layout
+       index-for-index. The vector is:
+         [bias, ax, ay, ax², ay², ax·ay,            // 6 — pupil geometry
+          yaw, pitch, lookH, lookV,                 // 4 — gaze direction cues
+          roll, hx, hy, hSize]                      // 4 — head pose / framing
+       Interaction terms (ax × pitch, lookH × yaw, …) are deliberately
+       not included; the last full 18-D head-pose model collapsed into
+       multicollinearity from exactly those interactions during the
+       within-session static round. */
     featureVec: [
       1,
       ax, ay,
       ax * ax, ay * ay, ax * ay,
       yaw, pitch,
+      lookH, lookV,
+      roll, hx, hy, hSize,
     ],
   };
 }
@@ -885,14 +1032,32 @@ function _onFrameUpdate(ts) {
      the same value and the one-euro filter is advanced exactly once.
      Without this, any frame that drove two consumers would step the
      filter twice and effectively halve its time constant. */
-  T.lastProjected = null;
-  T.lastSmoothed  = null;
-  if (T.lastFeatures && T.mapping) {
-    const p = _project(T.lastFeatures.featureVec);
-    if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
-      T.lastProjected = p;
-      T.lastSmoothed  = _smoothGaze(p.x, p.y, ts);
+  /* Blink gating: during a blink the iris is occluded by the upper
+     eyelid, so two features lie at once —
+       1) the MediaPipe iris landmark snaps upward toward the still-
+          visible top of the iris, so ay drops
+       2) the eyeLookUp* blendshapes fire because the model can't
+          distinguish a closed eye from an extreme upward gaze
+     Both push the projected gaze toward the top of the screen, which
+     produces a visible bottom→top jump on every blink. We freeze the
+     projection through the blink: T.lastSmoothed is left untouched so
+     the heatmap, gaze dot, and recorded gaze column hold the pre-
+     blink fixation, and the one-euro filter is not advanced (no stale
+     derivative to recover from when the eyes reopen). */
+  const blinking = !!(T.lastQuality && T.lastQuality.blink);
+  if (!blinking) {
+    T.lastProjected = null;
+    T.lastSmoothed  = null;
+    if (T.lastFeatures && T.mapping) {
+      const p = _project(T.lastFeatures.featureVec);
+      if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
+        T.lastProjected = p;
+        T.lastSmoothed  = _smoothGaze(p.x, p.y, ts);
+      }
     }
+  } else {
+    /* T.lastSmoothed retains its previous value across the blink. */
+    T.lastProjected = null;
   }
 
   if (T.phase === 'calibrating')           _calibrationFrame(ts);
@@ -1559,6 +1724,8 @@ function _finishCalibration() {
   if (staticClicks.length >= 5) {
     const axes = staticClicks.map((s) => s.features[1]);
     const ays  = staticClicks.map((s) => s.features[2]);
+    const lhs  = staticClicks.map((s) => s.features[8]);  // lookH
+    const lvs  = staticClicks.map((s) => s.features[9]);  // lookV
     const txs  = staticClicks.map((s) => s.target[0]);
     const tys  = staticClicks.map((s) => s.target[1]);
     const range = (a) => {
@@ -1580,15 +1747,28 @@ function _finishCalibration() {
       return denom > 0 ? num / denom : 0;
     };
     const rx = range(axes), ry = range(ays);
+    const rlh = range(lhs), rlv = range(lvs);
     console.info(
       `[gaze] feature responsiveness: ` +
       `ax [${rx.lo.toFixed(3)} … ${rx.hi.toFixed(3)}] Δ=${rx.d.toFixed(3)}, ` +
-      `ay [${ry.lo.toFixed(3)} … ${ry.hi.toFixed(3)}] Δ=${ry.d.toFixed(3)}`
+      `ay [${ry.lo.toFixed(3)} … ${ry.hi.toFixed(3)}] Δ=${ry.d.toFixed(3)}, ` +
+      `lookH [${rlh.lo.toFixed(3)} … ${rlh.hi.toFixed(3)}] Δ=${rlh.d.toFixed(3)}, ` +
+      `lookV [${rlv.lo.toFixed(3)} … ${rlv.hi.toFixed(3)}] Δ=${rlv.d.toFixed(3)}`
     );
     console.info(
       `[gaze] feature ↔ target correlation: ` +
       `corr(ax, target_x)=${corr(axes, txs).toFixed(3)}, ` +
-      `corr(ay, target_y)=${corr(ays, tys).toFixed(3)}`
+      `corr(ay, target_y)=${corr(ays, tys).toFixed(3)}, ` +
+      `corr(lookH, target_x)=${corr(lhs, txs).toFixed(3)}, ` +
+      `corr(lookV, target_y)=${corr(lvs, tys).toFixed(3)}`
+    );
+    /* Cross-correlation between the two redundant signals — high
+       magnitude (>0.95) on either pair would mean the new features
+       are nearly collinear with the old ones and won't help. */
+    console.info(
+      `[gaze] feature redundancy: ` +
+      `corr(ax, lookH)=${corr(axes, lhs).toFixed(3)}, ` +
+      `corr(ay, lookV)=${corr(ays, lvs).toFixed(3)}`
     );
   }
 
@@ -2555,14 +2735,30 @@ function _meanVector(vecs) {
   return out;
 }
 
-/* Weighted normal-equation solve.
-   Each sample contributes A_ij = Σ w · f_i · f_j and b_j = Σ w · f_j · t.
-   When w === null this reduces to ordinary least squares. */
-function _solveWeightedLeastSquares(F, t, w) {
+/* Weighted normal-equation solve, with optional Tikhonov regularization
+   toward a prior coefficient vector.
+
+   With no prior:    min Σᵢ wᵢ·(Fᵢ·w − tᵢ)²
+       solves        (FᵀWF + ε·I) w = FᵀW t,  ε = 1e-6 (numerical only)
+
+   With a prior p of strength λ:
+                     min Σᵢ wᵢ·(Fᵢ·w − tᵢ)² + λ·‖w − p‖²
+       solves        (FᵀWF + λ·I) w = FᵀW t + λ·p
+
+   When `priorMean` is null OR `priorLambda <= 0`, this reduces exactly to
+   the original solver (with a 1e-6 numerical jitter on the diagonal). */
+function _solveWeightedLeastSquares(F, t, w, priorMean, priorLambda) {
   const n = F.length;
   if (n === 0) return null;
   const m = F[0].length;
   if (n < m) return null;
+
+  const lam = (priorMean && priorLambda > 0) ? priorLambda : 0;
+  /* If we have a prior but its dimension doesn't match the current
+     feature length, silently ignore the prior rather than crashing —
+     this can only happen if someone hot-swapped feature schemas mid-
+     session. */
+  const usePrior = lam > 0 && priorMean.length === m;
 
   const A = Array.from({ length: m }, () => new Array(m).fill(0));
   const b = new Array(m).fill(0);
@@ -2576,14 +2772,16 @@ function _solveWeightedLeastSquares(F, t, w) {
       }
     }
   }
-  /* Tikhonov regularization for numerical stability */
-  for (let i = 0; i < m; i++) A[i][i] += 1e-6;
+  /* Tikhonov term. The +1e-6 jitter is always present (numerical
+     stability); the prior pull is added on top when usePrior. */
+  for (let i = 0; i < m; i++) A[i][i] += 1e-6 + (usePrior ? lam : 0);
+  if (usePrior) for (let j = 0; j < m; j++) b[j] += lam * priorMean[j];
   return _gaussianSolve(A, b);
 }
 
 /* Backwards-compatible wrapper. */
 function _solveLeastSquares(F, t) {
-  return _solveWeightedLeastSquares(F, t, null);
+  return _solveWeightedLeastSquares(F, t, null, null, 0);
 }
 
 /* Two-pass robust + weighted fit used by _finishEdgeCheck.
@@ -2600,8 +2798,16 @@ function _fitMappingRobust(samples) {
   const ys = samples.map((s) => s.target[1]);
   const ws = samples.map((s) => s.weight ?? 1);
 
-  const wxInit = _solveWeightedLeastSquares(features, xs, ws);
-  const wyInit = _solveWeightedLeastSquares(features, ys, ws);
+  /* Pull-toward-prior. When a population prior is loaded, the fit is
+     regularized toward those coefficients instead of toward zero, so
+     directions with weak per-user evidence inherit the population mean
+     rather than collapsing to 0. */
+  const priorWx = T.prior ? T.prior.wx : null;
+  const priorWy = T.prior ? T.prior.wy : null;
+  const lam     = T.prior ? CALIB_PRIOR_LAMBDA : 0;
+
+  const wxInit = _solveWeightedLeastSquares(features, xs, ws, priorWx, lam);
+  const wyInit = _solveWeightedLeastSquares(features, ys, ws, priorWy, lam);
   if (!wxInit || !wyInit) return null;
 
   const residuals = features.map((feat, i) => {
@@ -2629,8 +2835,8 @@ function _fitMappingRobust(samples) {
       f2.push(features[i]); x2.push(xs[i]); y2.push(ys[i]); w2.push(ws[i]);
     }
   }
-  const wxFinal = _solveWeightedLeastSquares(f2, x2, w2) || wxInit;
-  const wyFinal = _solveWeightedLeastSquares(f2, y2, w2) || wyInit;
+  const wxFinal = _solveWeightedLeastSquares(f2, x2, w2, priorWx, lam) || wxInit;
+  const wyFinal = _solveWeightedLeastSquares(f2, y2, w2, priorWy, lam) || wyInit;
 
   /* Quality summary — useful when accuracy looks off in test mode. */
   const meanResid = residuals.reduce((a, b) => a + b, 0) / residuals.length;

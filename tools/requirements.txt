@@ -1,0 +1,16 @@
+# Python deps for the offline benchmark pipeline (Option A in DESIGN_DOC §7).
+# Install into an isolated venv:
+#
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r tools/requirements.txt
+#
+# All versions are pinned to known-good combos that exist on PyPI for
+# macOS arm64 + Linux x86_64.
+
+mediapipe==0.10.14
+opencv-python==4.10.0.84
+numpy==1.26.4
+pandas==2.2.2
+pyarrow==16.1.0
+tqdm==4.66.4

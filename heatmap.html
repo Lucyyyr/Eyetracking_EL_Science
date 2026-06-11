@@ -147,6 +147,14 @@ const STORY_IMAGES = Array.from({ length: 10 }, (_, i) => {
   return img;
 });
 
+/* ── Preload emoji images ── */
+const EMOJI_IMAGES = Array.from({ length: 10 }, (_, i) => {
+  const img = new Image();
+  img.src = `storyimage/emoji_page${i + 1}.png`;
+  img.onload = () => { if (allPoints.length) render(); };
+  return img;
+});
+
 /* ── helpers ── */
 function setStatus(msg, cls = '') {
   const el = document.getElementById('status');
@@ -328,7 +336,8 @@ function render() {
   const sx = cW / scrW;   // screen px → canvas px
   const sy = cH / scrH;
 
-  const isPic = pts.some(p => p.mode === 'picture');
+  const isPic  = pts.some(p => p.mode === 'picture');
+  const isText = pts.some(p => p.mode === 'text');
 
   /* ── Derived layout constants (mirror CSS exactly) ──────────────────
      CSS reference:
@@ -406,6 +415,24 @@ function render() {
     rrPath(ctx, slotX, slotY, iBoxW, iBoxH, iRadius);
     ctx.stroke();
     ctx.restore();
+  }
+
+  /* 2b ── EMOJI SLOT (text mode) */
+  if (isText) {
+    const slotX = iCX - iBoxW / 2, slotY = iCY - iBoxH / 2;
+    if (pageVal !== 'all') {
+      const emojiImg = EMOJI_IMAGES[parseInt(pageVal) - 1];
+      if (emojiImg && emojiImg.complete && emojiImg.naturalWidth > 0) {
+        // contain-fit: scale to fit entirely within slot, centred
+        const iw = emojiImg.naturalWidth, ih = emojiImg.naturalHeight;
+        const scale = Math.min(iBoxW / iw, iBoxH / ih);
+        const dw = iw * scale, dh = ih * scale;
+        ctx.drawImage(emojiImg,
+          slotX + (iBoxW - dw) / 2,
+          slotY + (iBoxH - dh) / 2,
+          dw, dh);
+      }
+    }
   }
 
   /* 3 ── SENTENCE TEXT — FreshJam, same size/position as story page */
